@@ -1486,7 +1486,7 @@ public final class Settings {
     public final Setting<Boolean> elytraRenderSimulation = new Setting<>(true);
 
     /**
-     * Automatically path to and jump off of ledges to initiate elytra flight when grounded.
+     * Automatically jump, deploy the elytra, and use a firework with a terrain-aware launch angle when grounded.
      */
     public final Setting<Boolean> elytraAutoJump = new Setting<>(false);
 
@@ -1536,6 +1536,11 @@ public final class Settings {
      * Should elytra consider nether brick a valid landing block
      */
     public final Setting<Boolean> elytraAllowLandOnNetherFortress = new Setting<>(false);
+
+    /**
+     * Maximum horizontal radius used when searching for a safe landing point around the requested destination.
+     */
+    public final Setting<Integer> elytraLandingSearchRadius = new Setting<>(16);
 
     /**
      * Has the user read and understood the elytra terms and conditions

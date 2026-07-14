@@ -126,7 +126,7 @@ public class ElytraCommand extends Command {
         MutableComponent gatekeep = Component.literal("");
         gatekeep.append("To disable this message, enable the setting elytraTermsAccepted\n");
         gatekeep.append("Baritone Elytra is an experimental feature for long distance travel using fireworks for vanilla boost. It will not work with other mods (\"hacks\") for non-vanilla boost. ");
-        MutableComponent gatekeep2 = Component.literal("If you want Baritone to attempt to take off from the ground for you, you can enable the elytraAutoJump setting (not advisable on laggy servers!). ");
+        MutableComponent gatekeep2 = Component.literal("If you want Baritone to jump, deploy the elytra, and use a firework from the ground, enable the elytraAutoJump setting. The initial launch angle is calculated from nearby terrain. ");
         gatekeep2.setStyle(gatekeep2.getStyle().withHoverEvent(new HoverEvent.ShowText(Component.literal(Baritone.settings().prefix.value + "set elytraAutoJump true"))));
         gatekeep.append(gatekeep2);
         MutableComponent gatekeep3 = Component.literal("If you want Baritone to go slower, enable the elytraConserveFireworks setting and/or decrease the elytraFireworkSpeed setting. ");

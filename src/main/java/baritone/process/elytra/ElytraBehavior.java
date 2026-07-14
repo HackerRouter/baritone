@@ -363,7 +363,7 @@ public final class ElytraBehavior implements Helper {
                     return;
                 }
             }
-            if (!canSeeAny && rangeStartIncl < rangeEndExcl - 2 && process.state != ElytraProcess.State.GET_TO_JUMP) {
+            if (!canSeeAny && rangeStartIncl < rangeEndExcl - 2 && !process.isGroundTakeoffActive()) {
                 this.pathRecalcSegment(OptionalInt.of(rangeEndExcl - 1)).thenRun(() -> logVerbose("Recalculated segment since no path points were visible"));
             }
         }
@@ -469,9 +469,14 @@ public final class ElytraBehavior implements Helper {
     }
 
     public void pathTo() {
-        if (!Baritone.settings().elytraAutoJump.value || ctx.player().isFallFlying()) {
-            this.pathManager.pathToDestination();
+        this.pathManager.pathToDestination();
+    }
+
+    public boolean useGroundTakeoffFirework() {
+        if (this.remainingFireworkTicks > 0 || this.getAttachedFirework().isPresent()) {
+            return true;
         }
+        return this.deployFirework();
     }
 
     public void destroy() {
@@ -757,17 +762,23 @@ public final class ElytraBehavior implements Helper {
         ) {
             // Prioritize boosting fireworks over regular ones
             // TODO: Take the minimum boost time into account?
-            if (!baritone.getInventoryBehavior().throwaway(true, ElytraBehavior::isBoostingFireworks) &&
-                    !baritone.getInventoryBehavior().throwaway(true, ElytraBehavior::isFireworks)) {
+            if (!this.deployFirework()) {
                 logDirect("no fireworks");
-                return;
             }
-            logVerbose("attempting to use firework" + (forceUseFirework ? " (forced)" : ""));
-            ctx.playerController().processRightClick(ctx.player(), ctx.world(), InteractionHand.MAIN_HAND);
-            this.minimumBoostTicks = 10 * (1 + getFireworkBoost(ctx.player().getItemInHand(InteractionHand.MAIN_HAND)).orElse(0));
-            this.remainingFireworkTicks = 10;
-            this.deployedFireworkLastTick = true;
         }
+    }
+
+    private boolean deployFirework() {
+        if (!baritone.getInventoryBehavior().throwaway(true, ElytraBehavior::isBoostingFireworks)
+                && !baritone.getInventoryBehavior().throwaway(true, ElytraBehavior::isFireworks)) {
+            return false;
+        }
+        logVerbose("attempting to use firework");
+        ctx.playerController().processRightClick(ctx.player(), ctx.world(), InteractionHand.MAIN_HAND);
+        this.minimumBoostTicks = 10 * (1 + getFireworkBoost(ctx.player().getItemInHand(InteractionHand.MAIN_HAND)).orElse(0));
+        this.remainingFireworkTicks = 10;
+        this.deployedFireworkLastTick = true;
+        return true;
     }
 
     private final class SolverContext {
