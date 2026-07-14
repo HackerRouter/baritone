@@ -20,23 +20,33 @@ public final class AreaMiningOptions {
 
     public static final AreaMiningOptions DEFAULT = new AreaMiningOptions(
             AreaMiningLiquidPolicy.SEAL_BOUNDARY,
-            List.of(Blocks.SLIME_BLOCK)
+            List.of(Blocks.NETHERRACK),
+            Long.MAX_VALUE
     );
 
     private final AreaMiningLiquidPolicy liquidPolicy;
     private final List<Block> sealingBlocks;
+    private final long blockLimit;
 
     public AreaMiningOptions(AreaMiningLiquidPolicy liquidPolicy) {
-        this(liquidPolicy, List.of(Blocks.SLIME_BLOCK));
+        this(liquidPolicy, List.of(Blocks.NETHERRACK), Long.MAX_VALUE);
     }
 
     public AreaMiningOptions(AreaMiningLiquidPolicy liquidPolicy, Collection<Block> sealingBlocks) {
+        this(liquidPolicy, sealingBlocks, Long.MAX_VALUE);
+    }
+
+    public AreaMiningOptions(AreaMiningLiquidPolicy liquidPolicy, Collection<Block> sealingBlocks, long blockLimit) {
         this.liquidPolicy = Objects.requireNonNull(liquidPolicy, "liquidPolicy");
         Objects.requireNonNull(sealingBlocks, "sealingBlocks");
-        if (sealingBlocks.isEmpty() || sealingBlocks.stream().anyMatch(Objects::isNull)) {
-            throw new IllegalArgumentException("At least one non-null sealing block is required");
+        if (sealingBlocks.stream().anyMatch(Objects::isNull)) {
+            throw new IllegalArgumentException("Sealing blocks cannot contain null");
+        }
+        if (blockLimit < 0L) {
+            throw new IllegalArgumentException("Block limit cannot be negative");
         }
         this.sealingBlocks = List.copyOf(sealingBlocks);
+        this.blockLimit = blockLimit;
     }
 
     public AreaMiningLiquidPolicy liquidPolicy() {
@@ -45,5 +55,9 @@ public final class AreaMiningOptions {
 
     public List<Block> sealingBlocks() {
         return sealingBlocks;
+    }
+
+    public long blockLimit() {
+        return blockLimit;
     }
 }

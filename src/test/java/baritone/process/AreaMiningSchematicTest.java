@@ -10,6 +10,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import java.util.Collections;
+import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -48,8 +49,8 @@ public class AreaMiningSchematicTest {
         assertTrue(schematic.inSchematic(1, 2, 1, Blocks.WATER.defaultBlockState()));
         assertFalse(schematic.inSchematic(0, 0, 1, Blocks.STONE.defaultBlockState()));
         assertEquals(Blocks.AIR, schematic.desiredState(1, 0, 1, Blocks.STONE.defaultBlockState(), Collections.emptyList()).getBlock());
-        assertEquals(Blocks.SLIME_BLOCK, schematic.desiredState(0, 0, 1, Blocks.WATER.defaultBlockState(), Collections.emptyList()).getBlock());
-        assertEquals(Blocks.SLIME_BLOCK, schematic.desiredState(1, 0, 1, Blocks.WATER.defaultBlockState(), Collections.emptyList()).getBlock());
+        assertEquals(Blocks.NETHERRACK, schematic.desiredState(0, 0, 1, Blocks.WATER.defaultBlockState(), Collections.emptyList()).getBlock());
+        assertEquals(Blocks.NETHERRACK, schematic.desiredState(1, 0, 1, Blocks.WATER.defaultBlockState(), Collections.emptyList()).getBlock());
     }
 
     @Test
@@ -59,5 +60,24 @@ public class AreaMiningSchematicTest {
 
         assertTrue(schematic.inSchematic(0, 0, 0, Blocks.STONE.defaultBlockState()));
         assertFalse(schematic.inSchematic(0, 0, 0, Blocks.WATER.defaultBlockState()));
+    }
+
+    @Test
+    public void disallowedBlocksAreExcludedFromAreaMining() {
+        AreaMiningSchematic schematic = new AreaMiningSchematic(
+                AREA, new AreaMiningOptions(AreaMiningLiquidPolicy.SEAL_BOUNDARY), List.of(Blocks.STONE));
+
+        assertFalse(schematic.inSchematic(1, 0, 1, Blocks.STONE.defaultBlockState()));
+        assertTrue(schematic.inSchematic(1, 0, 1, Blocks.DIRT.defaultBlockState()));
+    }
+
+    @Test
+    public void emptySealingListSkipsLiquidsButKeepsOrdinaryBlocks() {
+        AreaMiningSchematic schematic = new AreaMiningSchematic(
+                AREA, new AreaMiningOptions(AreaMiningLiquidPolicy.SEAL_BOUNDARY, List.of(), 64L));
+
+        assertFalse(schematic.inSchematic(1, 0, 1, Blocks.WATER.defaultBlockState()));
+        assertTrue(schematic.inSchematic(1, 0, 1, Blocks.STONE.defaultBlockState()));
+        assertEquals(64L, new AreaMiningOptions(AreaMiningLiquidPolicy.AVOID, List.of(), 64L).blockLimit());
     }
 }

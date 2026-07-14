@@ -100,6 +100,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
     private AreaMiningStatus.State areaMiningState = AreaMiningStatus.State.IDLE;
     private AreaMiningStatus.PauseReason areaMiningPauseReason = AreaMiningStatus.PauseReason.NONE;
     private long areaMiningKnownRemaining = -1L;
+    private long areaMiningMinedBlocks;
     private boolean startingAreaMining;
     private boolean currentBuildIsAreaMining;
     public int stopAtHeight = 0;
@@ -293,7 +294,8 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         this.areaMiningState = AreaMiningStatus.State.RUNNING;
         this.areaMiningPauseReason = AreaMiningStatus.PauseReason.NONE;
         this.areaMiningKnownRemaining = -1L;
-        AreaMiningSchematic areaSchematic = new AreaMiningSchematic(area, options);
+        this.areaMiningMinedBlocks = 0L;
+        AreaMiningSchematic areaSchematic = new AreaMiningSchematic(area, options, Baritone.settings().blocksToDisallowBreaking.value);
         this.startingAreaMining = true;
         try {
             build("mine area", areaSchematic, areaSchematic.origin());
@@ -310,7 +312,8 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     .count();
         }
         final long total = this.areaMiningArea == null ? 0L : this.areaMiningArea.estimatedBlockCount();
-        return new AreaMiningStatus(this.areaMiningState, total, this.areaMiningKnownRemaining, this.areaMiningPauseReason);
+        final long blockLimit = this.areaMiningOptions == null ? Long.MAX_VALUE : this.areaMiningOptions.blockLimit();
+        return new AreaMiningStatus(this.areaMiningState, total, this.areaMiningKnownRemaining, this.areaMiningPauseReason, this.areaMiningMinedBlocks, blockLimit);
     }
 
     @Override
@@ -584,14 +587,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
         }
         final boolean hasWork = recalc(bcc);
-        if (this.currentBuildIsAreaMining
-                && hasWork
-                && this.areaMiningOptions.liquidPolicy() != AreaMiningLiquidPolicy.AVOID
-                && hasLiquidTargets(bcc)
-                && !hasConfiguredSealingBlock()) {
+        if (this.currentBuildIsAreaMining && hasWork && this.areaMiningMinedBlocks >= this.areaMiningOptions.blockLimit()) {
             this.paused = true;
             this.areaMiningState = AreaMiningStatus.State.PAUSED;
-            this.areaMiningPauseReason = AreaMiningStatus.PauseReason.NO_SEALING_BLOCKS;
+            this.areaMiningPauseReason = AreaMiningStatus.PauseReason.BLOCK_LIMIT_REACHED;
             return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
         }
         if (!hasWork) {
@@ -703,7 +702,9 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                 paused = true;
                 if (this.currentBuildIsAreaMining) {
                     this.areaMiningState = AreaMiningStatus.State.PAUSED;
-                    this.areaMiningPauseReason = AreaMiningStatus.PauseReason.PATHING_FAILED;
+                    this.areaMiningPauseReason = hasLiquidTargets(bcc) && !hasConfiguredSealingBlock()
+                            ? AreaMiningStatus.PauseReason.NO_SEALING_BLOCKS
+                            : AreaMiningStatus.PauseReason.PATHING_FAILED;
                 }
                 return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
             }
@@ -753,11 +754,17 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     int x = center.x + dx;
                     int y = center.y + dy;
                     int z = center.z + dz;
-                    BlockState desired = bcc.getSchematic(x, y, z, bcc.bsi.get0(x, y, z));
+                    BlockState current = bcc.bsi.get0(x, y, z);
+                    BlockState desired = bcc.getSchematic(x, y, z, current);
                     if (desired != null) {
                         // we care about this position
                         BetterBlockPos pos = new BetterBlockPos(x, y, z);
-                        if (valid(bcc.bsi.get0(x, y, z), desired, false)) {
+                        boolean wasIncorrect = incorrectPositions.contains(pos);
+                        if (valid(current, desired, false)) {
+                            if (this.currentBuildIsAreaMining && wasIncorrect && this.areaMiningArea.contains(pos)
+                                    && current.getBlock() instanceof AirBlock && desired.getBlock() instanceof AirBlock) {
+                                this.areaMiningMinedBlocks++;
+                            }
                             incorrectPositions.remove(pos);
                             observedCompleted.add(BetterBlockPos.longHash(pos));
                         } else {
@@ -837,7 +844,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                 if (state.getBlock() instanceof LiquidBlock) {
                     // if the block itself is JUST a liquid (i.e. not just a waterlogged block), we CANNOT break it
                     // TODO for 1.13 make sure that this only matches pure water, not waterlogged blocks
-                    if (this.currentBuildIsAreaMining && this.areaMiningOptions.liquidPolicy() == AreaMiningLiquidPolicy.AVOID) {
+                    if (this.currentBuildIsAreaMining && (this.areaMiningOptions.liquidPolicy() == AreaMiningLiquidPolicy.AVOID || !hasConfiguredSealingBlock())) {
                         flowingLiquids.add(pos);
                     } else if (this.currentBuildIsAreaMining || !MovementHelper.possiblyFlowing(state)) {
                         // if it's a source block then we want to replace it with a throwaway

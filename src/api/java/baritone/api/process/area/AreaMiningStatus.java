@@ -23,6 +23,7 @@ public final class AreaMiningStatus {
         NONE,
         MANUAL,
         NO_SEALING_BLOCKS,
+        BLOCK_LIMIT_REACHED,
         PATHING_FAILED
     }
 
@@ -30,16 +31,24 @@ public final class AreaMiningStatus {
     private final long estimatedTotalBlocks;
     private final long knownRemainingBlocks;
     private final PauseReason pauseReason;
+    private final long minedBlocks;
+    private final long blockLimit;
 
     public AreaMiningStatus(State state, long estimatedTotalBlocks, long knownRemainingBlocks) {
-        this(state, estimatedTotalBlocks, knownRemainingBlocks, PauseReason.NONE);
+        this(state, estimatedTotalBlocks, knownRemainingBlocks, PauseReason.NONE, 0L, Long.MAX_VALUE);
     }
 
     public AreaMiningStatus(State state, long estimatedTotalBlocks, long knownRemainingBlocks, PauseReason pauseReason) {
+        this(state, estimatedTotalBlocks, knownRemainingBlocks, pauseReason, 0L, Long.MAX_VALUE);
+    }
+
+    public AreaMiningStatus(State state, long estimatedTotalBlocks, long knownRemainingBlocks, PauseReason pauseReason, long minedBlocks, long blockLimit) {
         this.state = state;
         this.estimatedTotalBlocks = estimatedTotalBlocks;
         this.knownRemainingBlocks = knownRemainingBlocks;
         this.pauseReason = pauseReason;
+        this.minedBlocks = minedBlocks;
+        this.blockLimit = blockLimit;
     }
 
     public State state() {
@@ -59,5 +68,13 @@ public final class AreaMiningStatus {
 
     public PauseReason pauseReason() {
         return pauseReason;
+    }
+
+    public long minedBlocks() {
+        return minedBlocks;
+    }
+
+    public long blockLimit() {
+        return blockLimit;
     }
 }

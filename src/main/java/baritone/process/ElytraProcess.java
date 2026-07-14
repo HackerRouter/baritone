@@ -49,6 +49,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.AirBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.SlabBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -149,7 +150,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
                 logDirect("almost out of elytra durability or fireworks, but I'm going to continue since elytraAllowEmergencyLand is false");
             }
         }
-        if (ctx.player().isFallFlying() && this.state != State.LANDING && (this.behavior.pathManager.isComplete() || safetyLanding)) {
+        if (ctx.player().isFallFlying() && !isGroundTakeoffActive() && this.state != State.LANDING && (this.behavior.pathManager.isComplete() || safetyLanding)) {
             final BetterBlockPos last = this.behavior.pathManager.path.getLast();
             if (last != null && (ctx.player().position().distanceToSqr(last.getCenter()) < (48 * 48) || safetyLanding) && (!goingToLandingSpot || (safetyLanding && this.landingSpot == null))) {
                 logDirect("Path complete, picking a nearby safe landing spot...");
@@ -225,6 +226,13 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         }
 
         if (this.state == State.START_FLYING) {
+            if (Baritone.settings().elytraAutoJump.value && ctx.player().onGround()) {
+                this.state = State.GROUND_PREPARE;
+                this.groundTakeoffRotation = null;
+                this.groundTakeoffTicks = 0;
+                this.groundTakeoffFireworkUsed = false;
+                return tickGroundTakeoff();
+            }
             if (!isSafeToCancel) {
                 // owned
                 baritone.getPathingBehavior().secretInternalSegmentCancel();
@@ -256,7 +264,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         }
         if (this.state == State.GROUND_PREPARE) {
             this.groundTakeoffTicks++;
-            if (shouldLandForSafety() || fireworkQuantity() <= Baritone.settings().elytraMinFireworksBeforeLanding.value + 1) {
+            if (shouldLandForSafety() || fireworkQuantity() <= Baritone.settings().elytraMinFireworksBeforeLanding.value) {
                 logDirect("Ground takeoff cancelled because elytra durability or fireworks are too low for launch and continued flight.");
                 onLostControl();
                 return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
@@ -279,7 +287,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
                     onLostControl();
                     return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
                 }
-                logDirect(String.format("Ground takeoff trajectory selected: yaw %.1f, pitch %.1f", this.groundTakeoffRotation.getYaw(), this.groundTakeoffRotation.getPitch()));
+                logDirect(String.format("Ground takeoff trajectory selected: yaw %.1f, pitch %.1f", Rotation.normalizeYaw(this.groundTakeoffRotation.getYaw()), this.groundTakeoffRotation.getPitch()));
                 this.groundTakeoffTicks = 0;
             }
             baritone.getLookBehavior().updateTarget(this.groundTakeoffRotation, true);
@@ -604,10 +612,12 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         final BlockState state = ctx.world().getBlockState(pos);
         final Block block = state.getBlock();
         if (ctx.world().dimension() == Level.NETHER) {
-            return block == Blocks.NETHERRACK || block == Blocks.GRAVEL || (block == Blocks.NETHER_BRICKS && Baritone.settings().elytraAllowLandOnNetherFortress.value);
+            return block == Blocks.BEDROCK || block == Blocks.NETHERRACK || block == Blocks.GRAVEL
+                    || block instanceof SlabBlock && state.getFluidState().isEmpty()
+                    || block == Blocks.NETHER_BRICKS && Baritone.settings().elytraAllowLandOnNetherFortress.value;
         }
         return state.getFluidState().isEmpty()
-                && state.isFaceSturdy(ctx.world(), pos, Direction.UP)
+                && (state.isFaceSturdy(ctx.world(), pos, Direction.UP) || block instanceof SlabBlock)
                 && block != Blocks.MAGMA_BLOCK
                 && block != Blocks.CACTUS
                 && block != Blocks.CAMPFIRE
@@ -638,8 +648,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         return true;
     }
 
-    private boolean hasAirBubble(BlockPos pos) {
-        final int radius = 4; // Half of the full width, rounded down, as we're counting blocks in each direction from the center
+    private boolean hasAirBubble(BlockPos pos, int radius) {
         BlockPos.MutableBlockPos mut = new BlockPos.MutableBlockPos();
         for (int x = -radius; x <= radius; x++) {
             for (int y = -radius; y <= radius; y++) {
@@ -659,6 +668,10 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
     private Set<BetterBlockPos> badLandingSpots = new HashSet<>();
 
     private BetterBlockPos findSafeLandingSpot(BetterBlockPos target) {
+        BetterBlockPos exact = safeLandingApproachAt(target.x, target.y, target.z, true);
+        if (exact != null) {
+            return exact;
+        }
         int radius = Math.max(0, Baritone.settings().elytraLandingSearchRadius.value);
         Map<Integer, List<BlockPos>> columnsByDistance = new TreeMap<>();
         for (int dx = -radius; dx <= radius; dx++) {
@@ -698,12 +711,12 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         int clampedTargetY = Math.max(minFeetY, Math.min(maxFeetY, targetFeetY));
         int maxDifference = Math.max(clampedTargetY - minFeetY, maxFeetY - clampedTargetY);
         for (int difference = 0; difference <= maxDifference; difference++) {
-            BetterBlockPos lower = safeLandingApproachAt(x, clampedTargetY - difference, z);
+            BetterBlockPos lower = safeLandingApproachAt(x, clampedTargetY - difference, z, false);
             if (lower != null) {
                 return lower;
             }
             if (difference > 0) {
-                BetterBlockPos upper = safeLandingApproachAt(x, clampedTargetY + difference, z);
+                BetterBlockPos upper = safeLandingApproachAt(x, clampedTargetY + difference, z, false);
                 if (upper != null) {
                     return upper;
                 }
@@ -712,16 +725,16 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         return null;
     }
 
-    private BetterBlockPos safeLandingApproachAt(int x, int feetY, int z) {
+    private BetterBlockPos safeLandingApproachAt(int x, int feetY, int z, boolean allowEdge) {
         BlockPos floor = new BlockPos(x, feetY - 1, z);
         BetterBlockPos approach = new BetterBlockPos(x, feetY - 1 + LANDING_COLUMN_HEIGHT, z);
         if (!isInBounds(floor) || !isInBounds(approach) || !ctx.world().isLoaded(floor)) {
             return null;
         }
-        if (!isSafeBlock(floor) || isAtEdge(floor)) {
+        if (!isSafeBlock(floor) || !allowEdge && isAtEdge(floor)) {
             return null;
         }
-        if (!isColumnAir(floor, LANDING_COLUMN_HEIGHT) || !hasAirBubble(approach) || badLandingSpots.contains(approach)) {
+        if (!isColumnAir(floor, LANDING_COLUMN_HEIGHT) || !hasAirBubble(approach, allowEdge ? 1 : 4) || badLandingSpots.contains(approach)) {
             return null;
         }
         return approach;

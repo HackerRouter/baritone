@@ -144,6 +144,8 @@ public final class ElytraBehavior implements Helper {
 
         private int maxPlayerNear;
         private int ticksNearUnchanged;
+        private int nextSegmentRetryTicks;
+        private int nextSegmentFailureCount;
         private int playerNear;
 
         public PathManager() {
@@ -161,6 +163,10 @@ public final class ElytraBehavior implements Helper {
                 this.ticksNearUnchanged++;
             } else {
                 this.ticksNearUnchanged = 0;
+            }
+            if (this.maxPlayerNear > prevMaxNear) {
+                this.nextSegmentRetryTicks = 0;
+                this.nextSegmentFailureCount = 0;
             }
 
             // Obstacles are more important than an incomplete path, handle those first.
@@ -231,6 +237,8 @@ public final class ElytraBehavior implements Helper {
 
             this.path0(pathStart, ElytraBehavior.this.destination, segment -> segment.prepend(before.stream()))
                     .thenRun(() -> {
+                        this.nextSegmentRetryTicks = 0;
+                        this.nextSegmentFailureCount = 0;
                         final int recompute = this.path.size() - before.size() - 1;
                         final double distance = this.path.get(0).distanceTo(this.path.get(recompute));
 
@@ -245,7 +253,13 @@ public final class ElytraBehavior implements Helper {
                         if (ex != null) {
                             final Throwable cause = ex.getCause();
                             if (cause instanceof PathCalculationException) {
-                                logDirect("Failed to compute next segment");
+                                this.nextSegmentFailureCount++;
+                                this.nextSegmentRetryTicks = Math.min(100, 20 * this.nextSegmentFailureCount);
+                                if (this.nextSegmentFailureCount == 1) {
+                                    logDirect("Failed to compute next segment; retrying with backoff");
+                                } else {
+                                    logVerbose("Failed to compute next segment again");
+                                }
                                 if (ctx.player().distanceToSqr(pathStart.getCenter()) < 16 * 16) {
                                     logVerbose("Player is near the segment start, therefore repeating this calculation is pointless. Marking as complete");
                                     completePath = true;
@@ -264,6 +278,8 @@ public final class ElytraBehavior implements Helper {
             this.playerNear = 0;
             this.ticksNearUnchanged = 0;
             this.maxPlayerNear = 0;
+            this.nextSegmentRetryTicks = 0;
+            this.nextSegmentFailureCount = 0;
         }
 
         private void setPath(final UnpackedSegment segment) {
@@ -370,6 +386,10 @@ public final class ElytraBehavior implements Helper {
 
         private void attemptNextSegment() {
             if (this.recalculating) {
+                return;
+            }
+            if (this.nextSegmentRetryTicks > 0) {
+                this.nextSegmentRetryTicks--;
                 return;
             }
 

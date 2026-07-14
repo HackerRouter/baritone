@@ -14,21 +14,31 @@ import baritone.api.process.area.AreaMiningOptions;
 import baritone.api.process.area.IColumnarArea;
 import baritone.api.schematic.AbstractSchematic;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 final class AreaMiningSchematic extends AbstractSchematic {
 
     private final IColumnarArea area;
     private final AreaMiningOptions options;
     private final BlockPos origin;
+    private final Set<Block> blocksToDisallowBreaking;
 
     AreaMiningSchematic(IColumnarArea area, AreaMiningOptions options) {
+        this(area, options, List.of());
+    }
+
+    AreaMiningSchematic(IColumnarArea area, AreaMiningOptions options, Collection<Block> blocksToDisallowBreaking) {
         super(width(area, options), height(area, options), length(area, options));
         this.area = area;
         this.options = options;
+        this.blocksToDisallowBreaking = new HashSet<>(blocksToDisallowBreaking);
         final boolean seal = options.liquidPolicy() == AreaMiningLiquidPolicy.SEAL_BOUNDARY;
         if (seal && (area.minX() == Integer.MIN_VALUE || area.minZ() == Integer.MIN_VALUE
                 || area.maxX() == Integer.MAX_VALUE || area.maxY() == Integer.MAX_VALUE || area.maxZ() == Integer.MAX_VALUE)) {
@@ -50,11 +60,16 @@ final class AreaMiningSchematic extends AbstractSchematic {
         final int worldY = y + origin.getY();
         final int worldZ = z + origin.getZ();
         if (area.contains(worldX, worldY, worldZ)) {
-            return options.liquidPolicy() != AreaMiningLiquidPolicy.AVOID
+            if (currentState != null && blocksToDisallowBreaking.contains(currentState.getBlock())) {
+                return false;
+            }
+            return !options.sealingBlocks().isEmpty()
+                    && options.liquidPolicy() != AreaMiningLiquidPolicy.AVOID
                     || currentState == null
                     || currentState.getFluidState().isEmpty();
         }
-        return options.liquidPolicy() == AreaMiningLiquidPolicy.SEAL_BOUNDARY
+        return !options.sealingBlocks().isEmpty()
+                && options.liquidPolicy() == AreaMiningLiquidPolicy.SEAL_BOUNDARY
                 && currentState != null
                 && !currentState.getFluidState().isEmpty()
                 && touchesSideOrTopBoundary(worldX, worldY, worldZ);
@@ -80,6 +95,9 @@ final class AreaMiningSchematic extends AbstractSchematic {
             if (options.sealingBlocks().contains(state.getBlock())) {
                 return state;
             }
+        }
+        if (options.sealingBlocks().isEmpty()) {
+            return Blocks.AIR.defaultBlockState();
         }
         return options.sealingBlocks().get(0).defaultBlockState();
     }
