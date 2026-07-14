@@ -51,6 +51,10 @@
   <a href="http://forthebadge.com/"><img src="https://web.archive.org/web/20230604002050/https://forthebadge.com/images/badges/mom-made-pizza-rolls.svg" alt="forthebadge"/></a>
 </p>
 
+### Used [modified nether pathfinder](https://github.com/HackerRouter/nether-pathfinder)
+
+---
+
 A Minecraft pathfinder bot.
 
 Baritone is the pathfinding system used in [Impact](https://impactclient.net/) since 4.4. [Here's](https://www.youtube.com/watch?v=StquF69-_wI) a (very old!) video I made showing off what it can do.
