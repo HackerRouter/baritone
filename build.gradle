@@ -46,6 +46,12 @@ allprojects {
     }
 
     repositories {
+        if (rootProject.hasProperty("nether_pathfinder_local_maven")) {
+            maven {
+                name = 'local-nether-pathfinder'
+                url = rootProject.file(rootProject.property("nether_pathfinder_local_maven"))
+            }
+        }
         maven {
             url = "https://files.minecraftforge.net/maven/"
         }

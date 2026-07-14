@@ -202,6 +202,11 @@ public class Baritone implements IBaritone {
     }
 
     @Override
+    public BuilderProcess getAreaMineProcess() {
+        return this.builderProcess;
+    }
+
+    @Override
     public FarmProcess getFarmProcess() {
         return this.farmProcess;
     }

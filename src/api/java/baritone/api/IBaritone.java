@@ -59,6 +59,18 @@ public interface IBaritone {
     IMineProcess getMineProcess();
 
     /**
+     * @return The exact area mining process. This may share its implementation with another process.
+     * @see IAreaMineProcess
+     */
+    default IAreaMineProcess getAreaMineProcess() {
+        IBuilderProcess builder = getBuilderProcess();
+        if (builder instanceof IAreaMineProcess) {
+            return (IAreaMineProcess) builder;
+        }
+        throw new UnsupportedOperationException("This Baritone implementation does not provide area mining");
+    }
+
+    /**
      * @return The {@link IBuilderProcess} instance
      * @see IBuilderProcess
      */

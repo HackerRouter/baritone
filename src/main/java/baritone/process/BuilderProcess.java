@@ -23,8 +23,13 @@ import baritone.api.pathing.goals.GoalBlock;
 import baritone.api.pathing.goals.GoalComposite;
 import baritone.api.pathing.goals.GoalGetToBlock;
 import baritone.api.process.IBuilderProcess;
+import baritone.api.process.IAreaMineProcess;
 import baritone.api.process.PathingCommand;
 import baritone.api.process.PathingCommandType;
+import baritone.api.process.area.AreaMiningLiquidPolicy;
+import baritone.api.process.area.AreaMiningOptions;
+import baritone.api.process.area.AreaMiningStatus;
+import baritone.api.process.area.IColumnarArea;
 import baritone.api.schematic.*;
 import baritone.api.schematic.format.ISchematicFormat;
 import baritone.api.utils.*;
@@ -69,7 +74,7 @@ import java.util.stream.Stream;
 
 import static baritone.api.pathing.movement.ActionCosts.COST_INF;
 
-public final class BuilderProcess extends BaritoneProcessHelper implements IBuilderProcess {
+public final class BuilderProcess extends BaritoneProcessHelper implements IBuilderProcess, IAreaMineProcess {
 
     private static final Set<Property<?>> ORIENTATION_PROPS =
             ImmutableSet.of(
@@ -90,6 +95,13 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
     private int layer;
     private int numRepeats;
     private List<BlockState> approxPlaceable;
+    private IColumnarArea areaMiningArea;
+    private AreaMiningOptions areaMiningOptions;
+    private AreaMiningStatus.State areaMiningState = AreaMiningStatus.State.IDLE;
+    private AreaMiningStatus.PauseReason areaMiningPauseReason = AreaMiningStatus.PauseReason.NONE;
+    private long areaMiningKnownRemaining = -1L;
+    private boolean startingAreaMining;
+    private boolean currentBuildIsAreaMining;
     public int stopAtHeight = 0;
 
     public BuilderProcess(Baritone baritone) {
@@ -98,37 +110,45 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
     @Override
     public void build(String name, ISchematic schematic, Vec3i origin) {
+        if (!this.startingAreaMining && this.currentBuildIsAreaMining) {
+            this.areaMiningState = AreaMiningStatus.State.CANCELLED;
+            this.currentBuildIsAreaMining = false;
+        }
+        this.currentBuildIsAreaMining = this.startingAreaMining;
         this.name = name;
         this.schematic = schematic;
         this.realSchematic = null;
         boolean buildingSelectionSchematic = schematic instanceof SelectionSchematic;
-        if (!Baritone.settings().buildSubstitutes.value.isEmpty()) {
+        final boolean exactAreaMiningSchematic = schematic instanceof AreaMiningSchematic;
+        if (!exactAreaMiningSchematic && !Baritone.settings().buildSubstitutes.value.isEmpty()) {
             this.schematic = new SubstituteSchematic(this.schematic, Baritone.settings().buildSubstitutes.value);
         }
-        if (Baritone.settings().buildSchematicMirror.value != net.minecraft.world.level.block.Mirror.NONE) {
+        if (!exactAreaMiningSchematic && Baritone.settings().buildSchematicMirror.value != net.minecraft.world.level.block.Mirror.NONE) {
             this.schematic = new MirroredSchematic(this.schematic, Baritone.settings().buildSchematicMirror.value);
         }
-        if (Baritone.settings().buildSchematicRotation.value != net.minecraft.world.level.block.Rotation.NONE) {
+        if (!exactAreaMiningSchematic && Baritone.settings().buildSchematicRotation.value != net.minecraft.world.level.block.Rotation.NONE) {
             this.schematic = new RotatedSchematic(this.schematic, Baritone.settings().buildSchematicRotation.value);
         }
         // TODO this preserves the old behavior, but maybe we should bake the setting value right here
-        this.schematic = new MaskSchematic(this.schematic) {
-            @Override
-            public boolean partOfMask(int x, int y, int z, BlockState current) {
-                // partOfMask is only called inside the schematic so desiredState is not null
-                return !Baritone.settings().buildSkipBlocks.value.contains(this.desiredState(x, y, z, current, Collections.emptyList()).getBlock());
-            }
-        };
+        if (!exactAreaMiningSchematic) {
+            this.schematic = new MaskSchematic(this.schematic) {
+                @Override
+                public boolean partOfMask(int x, int y, int z, BlockState current) {
+                    // partOfMask is only called inside the schematic so desiredState is not null
+                    return !Baritone.settings().buildSkipBlocks.value.contains(this.desiredState(x, y, z, current, Collections.emptyList()).getBlock());
+                }
+            };
+        }
         int x = origin.getX();
         int y = origin.getY();
         int z = origin.getZ();
-        if (Baritone.settings().schematicOrientationX.value) {
+        if (!exactAreaMiningSchematic && Baritone.settings().schematicOrientationX.value) {
             x += schematic.widthX();
         }
-        if (Baritone.settings().schematicOrientationY.value) {
+        if (!exactAreaMiningSchematic && Baritone.settings().schematicOrientationY.value) {
             y += schematic.heightY();
         }
-        if (Baritone.settings().schematicOrientationZ.value) {
+        if (!exactAreaMiningSchematic && Baritone.settings().schematicOrientationZ.value) {
             z += schematic.lengthZ();
         }
         this.origin = new Vec3i(x, y, z);
@@ -160,10 +180,18 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
     public void resume() {
         paused = false;
+        if (this.currentBuildIsAreaMining) {
+            this.areaMiningState = AreaMiningStatus.State.RUNNING;
+            this.areaMiningPauseReason = AreaMiningStatus.PauseReason.NONE;
+        }
     }
 
     public void pause() {
         paused = true;
+        if (this.currentBuildIsAreaMining) {
+            this.areaMiningState = AreaMiningStatus.State.PAUSED;
+            this.areaMiningPauseReason = AreaMiningStatus.PauseReason.MANUAL;
+        }
     }
 
     @Override
@@ -243,6 +271,49 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
     }
 
     @Override
+    public void mineArea(IColumnarArea area, AreaMiningOptions options) {
+        Objects.requireNonNull(area, "area");
+        Objects.requireNonNull(options, "options");
+        if (ctx.world() == null) {
+            throw new IllegalStateException("Cannot start area mining without a loaded world");
+        }
+        final int worldMinY = ctx.world().dimensionType().minY();
+        final int worldMaxY = worldMinY + ctx.world().dimensionType().height() - 1;
+        if (area.minY() < worldMinY || area.maxY() > worldMaxY) {
+            throw new IllegalArgumentException("Area Y range must be within " + worldMinY + " and " + worldMaxY);
+        }
+        if (area.minX() > area.maxX() || area.minZ() > area.maxZ() || area.minY() > area.maxY()) {
+            throw new IllegalArgumentException("Area bounds are inverted");
+        }
+        if (this.currentBuildIsAreaMining) {
+            this.areaMiningState = AreaMiningStatus.State.CANCELLED;
+        }
+        this.areaMiningArea = area;
+        this.areaMiningOptions = options;
+        this.areaMiningState = AreaMiningStatus.State.RUNNING;
+        this.areaMiningPauseReason = AreaMiningStatus.PauseReason.NONE;
+        this.areaMiningKnownRemaining = -1L;
+        AreaMiningSchematic areaSchematic = new AreaMiningSchematic(area, options);
+        this.startingAreaMining = true;
+        try {
+            build("mine area", areaSchematic, areaSchematic.origin());
+        } finally {
+            this.startingAreaMining = false;
+        }
+    }
+
+    @Override
+    public AreaMiningStatus getAreaMiningStatus() {
+        if (this.currentBuildIsAreaMining && this.incorrectPositions != null) {
+            this.areaMiningKnownRemaining = this.incorrectPositions.stream()
+                    .filter(this.areaMiningArea::contains)
+                    .count();
+        }
+        final long total = this.areaMiningArea == null ? 0L : this.areaMiningArea.estimatedBlockCount();
+        return new AreaMiningStatus(this.areaMiningState, total, this.areaMiningKnownRemaining, this.areaMiningPauseReason);
+    }
+
+    @Override
     public List<BlockState> getApproxPlaceable() {
         return new ArrayList<>(approxPlaceable);
     }
@@ -284,6 +355,9 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     }
                     BlockState curr = bcc.bsi.get0(x, y, z);
                     if (!(curr.getBlock() instanceof AirBlock) && !(curr.getBlock() == Blocks.WATER || curr.getBlock() == Blocks.LAVA) && !valid(curr, desired, false)) {
+                        if (this.currentBuildIsAreaMining && MovementHelper.avoidBreakingDueToLiquid(bcc.bsi, x, y, z)) {
+                            continue;
+                        }
                         BetterBlockPos pos = new BetterBlockPos(x, y, z);
                         Optional<Rotation> rot = RotationUtils.reachable(ctx, pos, ctx.playerController().getBlockReachDistance());
                         if (rot.isPresent()) {
@@ -452,7 +526,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         if (paused) {
             return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
         }
-        if (Baritone.settings().buildInLayers.value) {
+        if (Baritone.settings().buildInLayers.value && !this.currentBuildIsAreaMining) {
             if (realSchematic == null) {
                 realSchematic = schematic;
             }
@@ -501,19 +575,44 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             };
         }
         BuilderCalculationContext bcc = new BuilderCalculationContext();
-        if (!recalc(bcc)) {
-            if (Baritone.settings().buildInLayers.value && layer * Baritone.settings().layerHeight.value < stopAtHeight) {
+        if (calcFailed && this.currentBuildIsAreaMining) {
+            this.paused = true;
+            this.areaMiningState = AreaMiningStatus.State.PAUSED;
+            this.areaMiningPauseReason = hasLiquidTargets(bcc) && !hasConfiguredSealingBlock()
+                    ? AreaMiningStatus.PauseReason.NO_SEALING_BLOCKS
+                    : AreaMiningStatus.PauseReason.PATHING_FAILED;
+            return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
+        }
+        final boolean hasWork = recalc(bcc);
+        if (this.currentBuildIsAreaMining
+                && hasWork
+                && this.areaMiningOptions.liquidPolicy() != AreaMiningLiquidPolicy.AVOID
+                && hasLiquidTargets(bcc)
+                && !hasConfiguredSealingBlock()) {
+            this.paused = true;
+            this.areaMiningState = AreaMiningStatus.State.PAUSED;
+            this.areaMiningPauseReason = AreaMiningStatus.PauseReason.NO_SEALING_BLOCKS;
+            return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
+        }
+        if (!hasWork) {
+            if (Baritone.settings().buildInLayers.value && !this.currentBuildIsAreaMining && layer * Baritone.settings().layerHeight.value < stopAtHeight) {
                 logDirect("Starting layer " + layer);
                 layer++;
                 return onTick(calcFailed, isSafeToCancel, recursions + 1);
             }
-            Vec3i repeat = Baritone.settings().buildRepeat.value;
-            int max = Baritone.settings().buildRepeatCount.value;
+            Vec3i repeat = this.currentBuildIsAreaMining ? new Vec3i(0, 0, 0) : Baritone.settings().buildRepeat.value;
+            int max = this.currentBuildIsAreaMining ? 1 : Baritone.settings().buildRepeatCount.value;
             numRepeats++;
             if (repeat.equals(new Vec3i(0, 0, 0)) || (max != -1 && numRepeats >= max)) {
                 logDirect("Done building");
                 if (Baritone.settings().notificationOnBuildFinished.value) {
                     logNotification("Done building", false);
+                }
+                if (this.currentBuildIsAreaMining) {
+                    this.areaMiningState = AreaMiningStatus.State.COMPLETE;
+                    this.areaMiningPauseReason = AreaMiningStatus.PauseReason.NONE;
+                    this.areaMiningKnownRemaining = 0L;
+                    this.currentBuildIsAreaMining = false;
                 }
                 onLostControl();
                 return null;
@@ -595,17 +694,31 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         if (goal == null) {
             goal = assemble(bcc, approxPlaceable, true); // we're far away, so assume that we have our whole inventory to recalculate placeable properly
             if (goal == null) {
-                if (Baritone.settings().skipFailedLayers.value && Baritone.settings().buildInLayers.value && layer * Baritone.settings().layerHeight.value < realSchematic.heightY()) {
+                if (Baritone.settings().skipFailedLayers.value && Baritone.settings().buildInLayers.value && !this.currentBuildIsAreaMining && layer * Baritone.settings().layerHeight.value < realSchematic.heightY()) {
                     logDirect("Skipping layer that I cannot construct! Layer #" + layer);
                     layer++;
                     return onTick(calcFailed, isSafeToCancel, recursions + 1);
                 }
                 logDirect("Unable to do it. Pausing. resume to resume, cancel to cancel");
                 paused = true;
+                if (this.currentBuildIsAreaMining) {
+                    this.areaMiningState = AreaMiningStatus.State.PAUSED;
+                    this.areaMiningPauseReason = AreaMiningStatus.PauseReason.PATHING_FAILED;
+                }
                 return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
             }
         }
         return new PathingCommandContext(goal, PathingCommandType.FORCE_REVALIDATE_GOAL_AND_PATH, bcc);
+    }
+
+    private boolean hasLiquidTargets(BuilderCalculationContext bcc) {
+        return this.incorrectPositions != null && this.incorrectPositions.stream()
+                .anyMatch(pos -> !bcc.bsi.get0(pos).getFluidState().isEmpty());
+    }
+
+    private boolean hasConfiguredSealingBlock() {
+        return this.approxPlaceable.stream()
+                .anyMatch(state -> this.areaMiningOptions.sealingBlocks().contains(state.getBlock()));
     }
 
     private boolean recalc(BuilderCalculationContext bcc) {
@@ -651,6 +764,8 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                             incorrectPositions.add(pos);
                             observedCompleted.remove(BetterBlockPos.longHash(pos));
                         }
+                    } else {
+                        incorrectPositions.remove(new BetterBlockPos(x, y, z));
                     }
                 }
             }
@@ -722,7 +837,9 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                 if (state.getBlock() instanceof LiquidBlock) {
                     // if the block itself is JUST a liquid (i.e. not just a waterlogged block), we CANNOT break it
                     // TODO for 1.13 make sure that this only matches pure water, not waterlogged blocks
-                    if (!MovementHelper.possiblyFlowing(state)) {
+                    if (this.currentBuildIsAreaMining && this.areaMiningOptions.liquidPolicy() == AreaMiningLiquidPolicy.AVOID) {
+                        flowingLiquids.add(pos);
+                    } else if (this.currentBuildIsAreaMining || !MovementHelper.possiblyFlowing(state)) {
                         // if it's a source block then we want to replace it with a throwaway
                         sourceLiquids.add(pos);
                     } else {
@@ -735,7 +852,11 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         });
         incorrectPositions.removeAll(outOfBounds);
         List<Goal> toBreak = new ArrayList<>();
-        breakable.forEach(pos -> toBreak.add(breakGoal(pos, bcc)));
+        breakable.forEach(pos -> {
+            if (!this.currentBuildIsAreaMining || !MovementHelper.avoidBreakingDueToLiquid(bcc.bsi, pos.x, pos.y, pos.z)) {
+                toBreak.add(breakGoal(pos, bcc));
+            }
+        });
         List<Goal> toPlace = new ArrayList<>();
         placeable.forEach(pos -> {
             if (!placeable.contains(pos.below()) && !placeable.contains(pos.below(2))) {
@@ -745,7 +866,11 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         sourceLiquids.forEach(pos -> toPlace.add(new GoalBlock(pos.above())));
 
         if (!toPlace.isEmpty()) {
-            return new JankyGoalComposite(new GoalComposite(toPlace.toArray(new Goal[0])), new GoalComposite(toBreak.toArray(new Goal[0])));
+            Goal placementGoal = new GoalComposite(toPlace.toArray(new Goal[0]));
+            if (toBreak.isEmpty()) {
+                return placementGoal;
+            }
+            return new JankyGoalComposite(placementGoal, new GoalComposite(toBreak.toArray(new Goal[0])));
         }
         if (toBreak.isEmpty()) {
             if (logMissing && !missing.isEmpty()) {
@@ -971,6 +1096,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
     @Override
     public void onLostControl() {
+        if (this.currentBuildIsAreaMining) {
+            this.areaMiningState = AreaMiningStatus.State.CANCELLED;
+            this.currentBuildIsAreaMining = false;
+        }
         incorrectPositions = null;
         name = null;
         schematic = null;
@@ -988,7 +1117,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
     @Override
     public Optional<Integer> getMinLayer() {
-        if (Baritone.settings().buildInLayers.value) {
+        if (Baritone.settings().buildInLayers.value && !this.currentBuildIsAreaMining) {
             return Optional.of(this.layer);
         }
         return Optional.empty();
@@ -996,7 +1125,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
     @Override
     public Optional<Integer> getMaxLayer() {
-        if (Baritone.settings().buildInLayers.value) {
+        if (Baritone.settings().buildInLayers.value && !this.currentBuildIsAreaMining) {
             return Optional.of(this.stopAtHeight);
         }
         return Optional.empty();

@@ -132,7 +132,7 @@ public final class ElytraBehavior implements Helper {
         this.solverExecutor = Executors.newSingleThreadExecutor();
         this.nextTickBoostCounter = new int[2];
 
-        this.context = new NetherPathfinderContext(Baritone.settings().elytraNetherSeed.value);
+        this.context = new NetherPathfinderContext(this.ctx.world(), Baritone.settings().elytraNetherSeed.value);
         this.boi = new BlockStateOctreeInterface(context);
     }
 

@@ -82,6 +82,14 @@ public interface MovementHelper extends ActionCosts, Helper {
                 || avoidAdjacentBreaking(bsi, x, y, z - 1, false);
     }
 
+    static boolean avoidBreakingDueToLiquid(BlockStateInterface bsi, int x, int y, int z) {
+        return avoidAdjacentLiquidBreaking(bsi, x, y + 1, z, true)
+                || avoidAdjacentLiquidBreaking(bsi, x + 1, y, z, false)
+                || avoidAdjacentLiquidBreaking(bsi, x - 1, y, z, false)
+                || avoidAdjacentLiquidBreaking(bsi, x, y, z + 1, false)
+                || avoidAdjacentLiquidBreaking(bsi, x, y, z - 1, false);
+    }
+
     static boolean avoidAdjacentBreaking(BlockStateInterface bsi, int x, int y, int z, boolean directlyAbove) {
         // returns true if you should avoid breaking a block that's adjacent to this one (e.g. lava that will start flowing if you give it a path)
         // this is only called for north, south, east, west, and up. this is NOT called for down.
@@ -95,8 +103,12 @@ public interface MovementHelper extends ActionCosts, Helper {
                 && FallingBlock.isFree(bsi.get0(x, y - 1, z))) { // and if it would fall (i.e. it's unsupported)
             return true; // dont break a block that is adjacent to unsupported gravel because it can cause really weird stuff
         }
-        // only pure liquids for now
-        // waterlogged blocks can have closed bottom sides and such
+        return avoidAdjacentLiquidBreaking(bsi, x, y, z, directlyAbove);
+    }
+
+    private static boolean avoidAdjacentLiquidBreaking(BlockStateInterface bsi, int x, int y, int z, boolean directlyAbove) {
+        BlockState state = bsi.get0(x, y, z);
+        Block block = state.getBlock();
         if (block instanceof LiquidBlock) {
             if (directlyAbove || Baritone.settings().strictLiquidCheck.value) {
                 return true;

@@ -46,6 +46,7 @@ import baritone.utils.PathingCommandContext;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.NonNullList;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -112,7 +113,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
     @Override
     public PathingCommand onTick(boolean calcFailed, boolean isSafeToCancel) {
         final long seedSetting = Baritone.settings().elytraNetherSeed.value;
-        if (seedSetting != this.behavior.context.getSeed()) {
+        if (ctx.world().dimension() == Level.NETHER && seedSetting != this.behavior.context.getSeed()) {
             logDirect("Nether seed changed, recalculating path");
             this.resetState();
         }
@@ -220,7 +221,12 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
                 return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
             }
             if (this.goal == null) {
-                this.goal = new GoalYLevel(31);
+                final int minY = ctx.world().dimensionType().minY();
+                final int maxY = minY + ctx.world().dimensionType().height() - 1;
+                final int targetY = ctx.world().dimension() == Level.NETHER
+                        ? 31
+                        : ctx.playerFeet().getY() - 32;
+                this.goal = new GoalYLevel(Math.max(minY + 1, Math.min(maxY - 1, targetY)));
             }
             final IPathExecutor executor = baritone.getPathingBehavior().getCurrent();
             if (executor != null && executor.getPath().getGoal() == this.goal) {
@@ -328,7 +334,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
     }
 
     private void pathTo0(BlockPos destination, boolean appendDestination) {
-        if (ctx.player() == null || ctx.player().level().dimension() != Level.NETHER) {
+        if (ctx.player() == null || ctx.world() == null) {
             return;
         }
         this.onLostControl();
@@ -348,7 +354,9 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         if (iGoal instanceof GoalXZ) {
             GoalXZ goal = (GoalXZ) iGoal;
             x = goal.getX();
-            y = 64;
+            final int minY = ctx.world().dimensionType().minY();
+            final int maxY = minY + ctx.world().dimensionType().height() - 1;
+            y = Math.max(minY, Math.min(maxY, ctx.playerFeet().getY()));
             z = goal.getZ();
         } else if (iGoal instanceof GoalBlock) {
             GoalBlock goal = (GoalBlock) iGoal;
@@ -358,8 +366,10 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         } else {
             throw new IllegalArgumentException("The goal must be a GoalXZ or GoalBlock");
         }
-        if (y <= 0 || y >= 128) {
-            throw new IllegalArgumentException("The y of the goal is not between 0 and 128");
+        final int minY = ctx.world().dimensionType().minY();
+        final int maxYExclusive = minY + ctx.world().dimensionType().height();
+        if (y < minY || y >= maxYExclusive) {
+            throw new IllegalArgumentException("The y of the goal is not between " + minY + " and " + (maxYExclusive - 1));
         }
         this.pathTo(new BlockPos(x, y, z));
     }
@@ -450,7 +460,7 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
 
         public WalkOffCalculationContext(IBaritone baritone) {
             super(baritone, true);
-            this.allowFallIntoLava = true;
+            this.allowFallIntoLava = baritone.getPlayerContext().world().dimension() == Level.NETHER;
             this.minFallHeight = 8;
             this.maxFallHeightNoWater = 10000;
         }
@@ -471,16 +481,23 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
         }
     }
 
-    private static boolean isInBounds(BlockPos pos) {
-        return pos.getY() >= 0 && pos.getY() < 128;
-    }
-
-    private boolean isSafeBlock(Block block) {
-        return block == Blocks.NETHERRACK || block == Blocks.GRAVEL || (block == Blocks.NETHER_BRICKS && Baritone.settings().elytraAllowLandOnNetherFortress.value);
+    private boolean isInBounds(BlockPos pos) {
+        final int minY = ctx.world().dimensionType().minY();
+        return pos.getY() >= minY && pos.getY() < minY + ctx.world().dimensionType().height();
     }
 
     private boolean isSafeBlock(BlockPos pos) {
-        return isSafeBlock(ctx.world().getBlockState(pos).getBlock());
+        final BlockState state = ctx.world().getBlockState(pos);
+        final Block block = state.getBlock();
+        if (ctx.world().dimension() == Level.NETHER) {
+            return block == Blocks.NETHERRACK || block == Blocks.GRAVEL || (block == Blocks.NETHER_BRICKS && Baritone.settings().elytraAllowLandOnNetherFortress.value);
+        }
+        return state.getFluidState().isEmpty()
+                && state.isFaceSturdy(ctx.world(), pos, Direction.UP)
+                && block != Blocks.MAGMA_BLOCK
+                && block != Blocks.CACTUS
+                && block != Blocks.CAMPFIRE
+                && block != Blocks.SOUL_CAMPFIRE;
     }
 
     private boolean isAtEdge(BlockPos pos) {
@@ -526,19 +543,20 @@ public class ElytraProcess extends BaritoneProcessHelper implements IBaritonePro
 
     private BetterBlockPos checkLandingSpot(BlockPos pos, LongOpenHashSet checkedSpots) {
         BlockPos.MutableBlockPos mut = new BlockPos.MutableBlockPos(pos.getX(), pos.getY(), pos.getZ());
-        while (mut.getY() >= 0) {
+        final int minY = ctx.world().dimensionType().minY();
+        while (mut.getY() >= minY) {
             if (checkedSpots.contains(mut.asLong())) {
                 return null;
             }
             checkedSpots.add(mut.asLong());
-            Block block = ctx.world().getBlockState(mut).getBlock();
+            BlockState state = ctx.world().getBlockState(mut);
 
-            if (isSafeBlock(block)) {
+            if (isSafeBlock(mut)) {
                 if (!isAtEdge(mut)) {
                     return new BetterBlockPos(mut);
                 }
                 return null;
-            } else if (block != Blocks.AIR) {
+            } else if (!state.isAir()) {
                 return null;
             }
             mut.set(mut.getX(), mut.getY() - 1, mut.getZ());
