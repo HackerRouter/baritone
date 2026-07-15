@@ -550,7 +550,7 @@ public final class ElytraBehavior implements Helper {
     private void onTick0() {
         // Fetch the previous solution, regardless of if it's going to be used
         this.pendingSolution = null;
-        if (this.solver != null) {
+        if (this.solver != null && this.solver.isDone()) {
             try {
                 this.pendingSolution = this.solver.get();
             } catch (Exception ignored) {
@@ -665,8 +665,10 @@ public final class ElytraBehavior implements Helper {
             // changed. Updating it now will avoid unnecessary recalculation on the main thread.
             this.pathManager.updatePlayerNear();
 
-            final SolverContext context = this.new SolverContext(true);
-            this.solver = this.solverExecutor.submit(() -> this.solveAngles(context));
+            if (this.solver == null) {
+                final SolverContext context = this.new SolverContext(true);
+                this.solver = this.solverExecutor.submit(() -> this.solveAngles(context));
+            }
             this.solveNextTick = false;
         }
     }
