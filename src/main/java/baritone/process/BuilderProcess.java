@@ -358,7 +358,8 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     }
                     BlockState curr = bcc.bsi.get0(x, y, z);
                     if (!(curr.getBlock() instanceof AirBlock) && !(curr.getBlock() == Blocks.WATER || curr.getBlock() == Blocks.LAVA) && !valid(curr, desired, false)) {
-                        if (this.currentBuildIsAreaMining && MovementHelper.avoidBreakingDueToLiquid(bcc.bsi, x, y, z)) {
+                        if (this.currentBuildIsAreaMining && MovementHelper.avoidBreakingDueToLiquid(bcc.bsi, x, y, z)
+                                && !isTemporaryBoundarySeal(new BetterBlockPos(x, y, z), curr, bcc.bsi)) {
                             continue;
                         }
                         BetterBlockPos pos = new BetterBlockPos(x, y, z);
@@ -390,6 +391,28 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
     private Optional<Placement> searchForPlacables(BuilderCalculationContext bcc, List<BlockState> desirableOnHotbar) {
         BetterBlockPos center = ctx.playerFeet();
+        if (this.currentBuildIsAreaMining && this.areaMiningOptions.liquidPolicy() == AreaMiningLiquidPolicy.SEAL_BOUNDARY) {
+            for (int dx = -5; dx <= 5; dx++) {
+                for (int dy = -5; dy <= 1; dy++) {
+                    for (int dz = -5; dz <= 5; dz++) {
+                        BetterBlockPos pos = new BetterBlockPos(center.x + dx, center.y + dy, center.z + dz);
+                        BlockState current = bcc.bsi.get0(pos);
+                        if (!isSideBoundaryLiquid(pos, current)) {
+                            continue;
+                        }
+                        BlockState desired = bcc.getSchematic(pos.x, pos.y, pos.z, current);
+                        if (desired == null) {
+                            continue;
+                        }
+                        desirableOnHotbar.add(desired);
+                        Optional<Placement> placement = possibleToPlace(desired, pos.x, pos.y, pos.z, bcc.bsi);
+                        if (placement.isPresent()) {
+                            return placement;
+                        }
+                    }
+                }
+            }
+        }
         for (int dx = -5; dx <= 5; dx++) {
             for (int dy = -5; dy <= 1; dy++) {
                 for (int dz = -5; dz <= 5; dz++) {
@@ -860,7 +883,9 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         incorrectPositions.removeAll(outOfBounds);
         List<Goal> toBreak = new ArrayList<>();
         breakable.forEach(pos -> {
-            if (!this.currentBuildIsAreaMining || !MovementHelper.avoidBreakingDueToLiquid(bcc.bsi, pos.x, pos.y, pos.z)) {
+            BlockState state = bcc.bsi.get0(pos);
+            if (!this.currentBuildIsAreaMining || !MovementHelper.avoidBreakingDueToLiquid(bcc.bsi, pos.x, pos.y, pos.z)
+                    || isTemporaryBoundarySeal(pos, state, bcc.bsi)) {
                 toBreak.add(breakGoal(pos, bcc));
             }
         });
@@ -870,7 +895,21 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                 toPlace.add(placementGoal(pos, bcc));
             }
         });
-        sourceLiquids.forEach(pos -> toPlace.add(new GoalBlock(pos.above())));
+        sourceLiquids.forEach(pos -> {
+            if (!this.currentBuildIsAreaMining || this.areaMiningArea.contains(pos)
+                    || pos.y < this.areaMiningArea.minY() || pos.y > this.areaMiningArea.maxY()) {
+                toPlace.add(new GoalBlock(pos.above()));
+                return;
+            }
+            List<BetterBlockPos> interior = areaInteriorNeighbors(this.areaMiningArea, pos).stream()
+                    .filter(candidate -> isOpenBoundarySealStand(candidate, bcc.bsi))
+                    .toList();
+            if (interior.isEmpty() || !hasBoundarySealSupport(pos, bcc.bsi)) {
+                return;
+            }
+            Goal[] goals = interior.stream().map(BoundarySealGoal::new).toArray(Goal[]::new);
+            toPlace.add(goals.length == 1 ? goals[0] : new GoalComposite(goals));
+        });
 
         if (!toPlace.isEmpty()) {
             Goal placementGoal = new GoalComposite(toPlace.toArray(new Goal[0]));
@@ -895,6 +934,72 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             return null;
         }
         return new GoalComposite(toBreak.toArray(new Goal[0]));
+    }
+
+    static List<BetterBlockPos> areaInteriorNeighbors(IColumnarArea area, BetterBlockPos boundary) {
+        List<BetterBlockPos> result = new ArrayList<>();
+        for (Direction direction : List.of(Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST)) {
+            BetterBlockPos candidate = new BetterBlockPos(
+                    boundary.x + direction.getStepX(),
+                    boundary.y,
+                    boundary.z + direction.getStepZ()
+            );
+            if (area.contains(candidate)) {
+                result.add(candidate);
+            }
+        }
+        return result;
+    }
+
+    private boolean isOpenBoundarySealStand(BetterBlockPos position, BlockStateInterface bsi) {
+        BlockState feet = bsi.get0(position);
+        BlockState head = bsi.get0(position.above());
+        BlockState floor = bsi.get0(position.below());
+        return feet.getFluidState().isEmpty()
+                && head.getFluidState().isEmpty()
+                && MovementHelper.isReplaceable(position.x, position.y, position.z, feet, bsi)
+                && MovementHelper.isReplaceable(position.x, position.y + 1, position.z, head, bsi)
+                && !MovementHelper.isReplaceable(position.x, position.y - 1, position.z, floor, bsi);
+    }
+
+    private boolean hasBoundarySealSupport(BetterBlockPos position, BlockStateInterface bsi) {
+        for (Direction direction : Direction.values()) {
+            BetterBlockPos support = position.relative(direction);
+            if (this.areaMiningArea.contains(support)) {
+                continue;
+            }
+            BlockState state = bsi.get0(support);
+            if (!MovementHelper.isReplaceable(support.x, support.y, support.z, state, bsi)
+                    && !state.getShape(ctx.world(), support).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isSideBoundaryLiquid(BetterBlockPos position, BlockState state) {
+        return position.y >= this.areaMiningArea.minY()
+                && position.y <= this.areaMiningArea.maxY()
+                && !this.areaMiningArea.contains(position)
+                && !state.getFluidState().isEmpty()
+                && !areaInteriorNeighbors(this.areaMiningArea, position).isEmpty();
+    }
+
+    private boolean isTemporaryBoundarySeal(BetterBlockPos position, BlockState state, BlockStateInterface bsi) {
+        if (!this.areaMiningArea.contains(position) || !this.areaMiningOptions.sealingBlocks().contains(state.getBlock())) {
+            return false;
+        }
+        for (Direction direction : List.of(Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST)) {
+            BetterBlockPos boundary = new BetterBlockPos(
+                    position.x + direction.getStepX(),
+                    position.y,
+                    position.z + direction.getStepZ()
+            );
+            if (isSideBoundaryLiquid(boundary, bsi.get0(boundary)) && hasBoundarySealSupport(boundary, bsi)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static class JankyGoalComposite implements Goal {
@@ -1098,6 +1203,18 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     SettingsUtil.maybeCensor(y),
                     SettingsUtil.maybeCensor(z)
             );
+        }
+    }
+
+    static final class BoundarySealGoal extends GoalBlock {
+
+        BoundarySealGoal(BlockPos standAt) {
+            super(standAt);
+        }
+
+        @Override
+        public double heuristic(int x, int y, int z) {
+            return this.y * 100 + super.heuristic(x, y, z);
         }
     }
 

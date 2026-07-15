@@ -3,6 +3,7 @@ package baritone.process;
 import baritone.api.process.area.AreaMiningLiquidPolicy;
 import baritone.api.process.area.AreaMiningOptions;
 import baritone.api.process.area.IColumnarArea;
+import baritone.api.utils.BetterBlockPos;
 import net.minecraft.SharedConstants;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.world.level.block.Blocks;
@@ -79,5 +80,18 @@ public class AreaMiningSchematicTest {
         assertFalse(schematic.inSchematic(1, 0, 1, Blocks.WATER.defaultBlockState()));
         assertTrue(schematic.inSchematic(1, 0, 1, Blocks.STONE.defaultBlockState()));
         assertEquals(64L, new AreaMiningOptions(AreaMiningLiquidPolicy.AVOID, List.of(), 64L).blockLimit());
+    }
+
+    @Test
+    public void multiLevelSideBoundaryUsesVerticallyAlignedInteriorApproaches() {
+        for (int y = AREA.minY(); y <= AREA.maxY(); y++) {
+            List<BetterBlockPos> approaches = BuilderProcess.areaInteriorNeighbors(AREA, new BetterBlockPos(9, y, 20));
+            assertEquals(List.of(new BetterBlockPos(10, y, 20)), approaches);
+        }
+    }
+
+    @Test
+    public void topBoundaryDoesNotHaveSameLevelInteriorApproaches() {
+        assertTrue(BuilderProcess.areaInteriorNeighbors(AREA, new BetterBlockPos(10, 7, 20)).isEmpty());
     }
 }
