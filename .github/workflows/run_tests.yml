@@ -21,6 +21,20 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
       
+    - name: Download modified Nether Pathfinder
+      run: |
+        mkdir -p "$GITHUB_WORKSPACE/.deps"
+
+        curl --fail --location --retry 3 \
+          "https://github.com/HackerRouter/nether-pathfinder/releases/download/v1.6-windows-hr.1/nether-pathfinder-1.6-windows-hr.1.jar" \
+          --output "$GITHUB_WORKSPACE/.deps/nether-pathfinder.jar"
+
+        echo "D87727EC9336B4A95FA2755E405A72F718090E1502BBB255746788451A8056D3  $GITHUB_WORKSPACE/.deps/nether-pathfinder.jar" \
+          | sha256sum --check
+
     - name: Executing tests
-      run: ./gradlew test
+      run: |
+        ./gradlew test \
+          -Pnether_pathfinder_jar="$GITHUB_WORKSPACE/.deps/nether-pathfinder.jar" \
+          -Pnether_pathfinder_version=1.6-windows-hr.1
 

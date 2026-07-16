@@ -15,6 +15,12 @@
  * along with Baritone.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+def netherPathfinderJar = findProperty("nether_pathfinder_jar")
+def netherPathfinderJarFile = netherPathfinderJar ? file(netherPathfinderJar) : null
+
+ext.netherPathfinderDependency =
+        "dev.babbaj:nether-pathfinder:${nether_pathfinder_version}"
+
 allprojects {
     apply plugin: 'java'
     apply plugin: "xyz.wagyourtail.unimined"
@@ -46,6 +52,12 @@ allprojects {
     }
 
     repositories {
+        if (netherPathfinderJarFile != null) {
+            flatDir {
+                name = 'released-nether-pathfinder'
+                dirs netherPathfinderJarFile.parentFile
+            }
+        }
         if (rootProject.hasProperty("nether_pathfinder_local_maven")) {
             maven {
                 name = 'local-nether-pathfinder'
@@ -90,7 +102,7 @@ allprojects {
         compileOnly "org.spongepowered:mixin:${project.mixin_version}"
         compileOnly "org.ow2.asm:asm:${project.asm_version}"
 
-        implementation "dev.babbaj:nether-pathfinder:${project.nether_pathfinder_version}"
+        implementation rootProject.ext.netherPathfinderDependency
 
         implementation 'com.google.code.findbugs:jsr305:3.0.2'
     }
