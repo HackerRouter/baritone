@@ -17,6 +17,7 @@
 
 repositories {
     mavenLocal()
+    mavenCentral()
     maven {
         name = 'WagYourMaven'
         url = 'https://maven.wagyourtail.xyz/releases'
@@ -37,7 +38,7 @@ repositories {
         name = 'NeoForgedMaven'
         url = 'https://maven.neoforged.net/'
     }
-    mavenCentral()
+
 }
 
 dependencies {
